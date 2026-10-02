@@ -28,3 +28,25 @@ It stated the limits itself: it can't see real refund status because it can't ca
 The agent reported that ticket 999999 doesn't exist, that Freshdesk returned "not found", and that it was probably a typo or an ID from another account. It offered to look up a different ID, or search by requester email or tag.
 
 **Why it shows the design:** the missing ticket arrives as an `isError` result with a readable message, and the agent recovers with a next step instead of failing.
+
+---
+
+Sections 5 and 6 cover the write and Razorpay tools. They are not agent sessions: section 5 is a script acting as the MCP client, so the tool calls and results are real but no agent chose them. The server was started with `FRESHDESK_ALLOW_WRITES=1`.
+
+## 5. Working a refund ticket with the write tools
+Scratch ticket #20 ("Refund not received for cancelled order", requester `rohan@teahouse.example`, tagged `refund`, containing `order_Z9y8X7w6V5u4T3` and `pay_Z9y8X7w6V5u4T4`). Calls made, in order, with the key results:
+
+1. `list_agents {}` → one agent, id `1120013340829`.
+2. `assign_ticket {id: 20, responder_id: 1120013340829}` → `responder_id: 1120013340829`, `group_id: null`.
+3. `add_note {id: 20, body: "Payment pay_Z9y8X7w6V5u4T4 captured, order cancelled. Raising refund with finance."}` → `private: true`.
+4. `update_tags {id: 20, add: ["refund-initiated"]}` → tags `["refund", "refund-initiated"]` (the existing `refund` tag is kept).
+5. `reply_to_ticket {id: 20, body: "Hi Rohan,\nWe have started the refund…"}` → `private: false`, sent as an email to the customer.
+6. `update_ticket {id: 20, status: "resolved"}` → `status: "resolved"`.
+7. `get_ticket {id: 20}` → status `resolved`, the new tags, and the note and reply in `conversations`.
+
+**Why it shows the design:** every write is a typed tool call (no raw API bodies), ids come from `list_agents` rather than being guessed, tags are merged instead of replaced, and the note defaults to private. Agent text is HTML-escaped before it is sent. The write tools only exist because the operator set `FRESHDESK_ALLOW_WRITES=1`; without it `listTools` returns the read tools only.
+
+## 6. Verifying a payment against Razorpay
+Not run live yet. `verify_payment_refs` needs `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` (test-mode keys are fine), and none were available when this demo was recorded. The tool is covered by offline tests against mocked Razorpay responses (a found payment, a processed refund, an unknown id returning `found: false`, and a 401 surfacing as an error).
+
+To capture a live run: put the keys in `.env`, optionally set `RAZORPAY_TEST_PAYMENT_ID` to a real test payment, and run `npm run smoke`. Then ask the agent "Which open tickets mention a payment that hasn't been refunded yet, and which of those payments actually exist in Razorpay?" and paste the answer here.
