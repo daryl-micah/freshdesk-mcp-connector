@@ -1,4 +1,4 @@
-// Read-only Freshdesk v2 API client: auth, timeouts, retries, rate limits, typed errors.
+// Freshdesk v2 API client (plus the shared HTTP core Razorpay reuses): auth, timeouts, retries, rate limits, typed errors.
 import { z } from "zod";
 
 export const STATUS = { open: 2, pending: 3, resolved: 4, closed: 5 } as const;
@@ -23,15 +23,14 @@ export class FreshdeskError extends Error {
   }
 }
 
-export type ClientOptions = {
-  domain: string;
-  apiKey: string;
+export type HttpOptions = {
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   maxAttempts?: number;
   timeoutMs?: number;
   log?: (msg: string) => void;
 };
+export type ClientOptions = HttpOptions & { domain: string; apiKey: string };
 
 // Accepts "acme", "acme.freshdesk.com" or "https://acme.freshdesk.com/"; only *.freshdesk.com is allowed
 // so a misconfigured value can never send the API key to another host.
@@ -47,31 +46,45 @@ export function normalizeDomain(input: string): string {
 const RETRY_AFTER_CAP_SEC = 60;
 const LOW_REMAINING = 5;
 
-export function createClient(opts: ClientOptions) {
-  const base = `https://${normalizeDomain(opts.domain)}/api/v2`;
-  const auth = "Basic " + Buffer.from(`${opts.apiKey}:X`).toString("base64");
-  const doFetch = opts.fetch ?? fetch;
-  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const maxAttempts = opts.maxAttempts ?? 3;
-  const timeoutMs = opts.timeoutMs ?? 10_000;
-  const log = opts.log ?? ((m) => console.error(`[freshdesk] ${m}`));
+type Params = Record<string, string | number | undefined>;
+type Method = "GET" | "POST" | "PUT";
+
+// Shared HTTP core. `name` only labels error messages; base/auth decide which service it talks to.
+export function createHttp(cfg: { name: string; base: string; auth: string; credsVar: string } & HttpOptions) {
+  const { name, base, auth, credsVar } = cfg;
+  const doFetch = cfg.fetch ?? fetch;
+  const sleep = cfg.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const maxAttempts = cfg.maxAttempts ?? 3;
+  const timeoutMs = cfg.timeoutMs ?? 10_000;
+  const log = cfg.log ?? ((m) => console.error(`[${name.toLowerCase()}] ${m}`));
   const backoffMs = (attempt: number) => 500 * 2 ** (attempt - 1) + Math.random() * 250;
   let rateLimitRemaining: number | undefined;
 
-  async function get(path: string, params: Record<string, string | number | undefined> = {}) {
+  async function request(method: Method, path: string, o: { params?: Params; body?: unknown } = {}) {
     const url = new URL(base + path);
-    for (const [k, v] of Object.entries(params)) if (v !== undefined) url.searchParams.set(k, String(v));
+    for (const [k, v] of Object.entries(o.params ?? {})) if (v !== undefined) url.searchParams.set(k, String(v));
+    // A POST that may have reached the server must not be resent (it could duplicate a customer reply).
+    // 429 is always safe: the request was rejected. GET and PUT are idempotent.
+    const mayRetryAfterSend = method !== "POST";
+    const unsure = mayRetryAfterSend ? "" : " The request may have been applied; check the ticket before retrying.";
 
     for (let attempt = 1; ; attempt++) {
       let res: Response;
       try {
         res = await doFetch(url, {
-          headers: { Authorization: auth, Accept: "application/json" },
+          method,
+          headers: {
+            Authorization: auth,
+            Accept: "application/json",
+            ...(o.body !== undefined && { "Content-Type": "application/json" }),
+          },
+          body: o.body === undefined ? undefined : JSON.stringify(o.body),
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (e) {
         const msg = (e as Error).name === "TimeoutError" ? `timed out after ${timeoutMs}ms` : (e as Error).message;
-        if (attempt >= maxAttempts) throw new FreshdeskError(0, `Freshdesk unreachable: ${msg}`, true);
+        if (!mayRetryAfterSend) throw new FreshdeskError(0, `${name} unreachable: ${msg}.${unsure}`);
+        if (attempt >= maxAttempts) throw new FreshdeskError(0, `${name} unreachable: ${msg}`, true);
         log(`network error (${msg}), retry ${attempt}/${maxAttempts - 1}`);
         await sleep(backoffMs(attempt));
         continue;
@@ -84,19 +97,20 @@ export function createClient(opts: ClientOptions) {
         const header = Number(res.headers.get("retry-after"));
         const wait = Math.min(res.headers.has("retry-after") && !Number.isNaN(header) ? header : RETRY_AFTER_CAP_SEC, RETRY_AFTER_CAP_SEC);
         if (attempt >= maxAttempts) {
-          throw new FreshdeskError(429, `Freshdesk rate limit hit; try again in ${wait}s`, true, wait);
+          throw new FreshdeskError(429, `${name} rate limit hit; try again in ${wait}s`, true, wait);
         }
         log(`429 rate limited, waiting ${wait}s (Retry-After), retry ${attempt}/${maxAttempts - 1}`);
         await sleep(wait * 1000);
         continue;
       }
       if (res.status >= 500) {
-        if (attempt >= maxAttempts) throw new FreshdeskError(res.status, `Freshdesk server error ${res.status}`, true);
-        log(`${res.status} from Freshdesk, retry ${attempt}/${maxAttempts - 1}`);
+        if (!mayRetryAfterSend) throw new FreshdeskError(res.status, `${name} server error ${res.status}.${unsure}`);
+        if (attempt >= maxAttempts) throw new FreshdeskError(res.status, `${name} server error ${res.status}`, true);
+        log(`${res.status} from ${name}, retry ${attempt}/${maxAttempts - 1}`);
         await sleep(backoffMs(attempt));
         continue;
       }
-      if (!res.ok) throw new FreshdeskError(res.status, await describeError(res, url.pathname));
+      if (!res.ok) throw new FreshdeskError(res.status, await describeError(res, url.pathname, name, credsVar));
 
       // ponytail: per-process throttle; a shared token bucket is needed once several workers share one key.
       if (rateLimitRemaining !== undefined && rateLimitRemaining < LOW_REMAINING) {
@@ -107,23 +121,40 @@ export function createClient(opts: ClientOptions) {
     }
   }
 
-  return { get, rateLimit: () => rateLimitRemaining };
+  return {
+    get: (path: string, params?: Params) => request("GET", path, { params }),
+    post: (path: string, body: unknown) => request("POST", path, { body }),
+    put: (path: string, body: unknown) => request("PUT", path, { body }),
+    rateLimit: () => rateLimitRemaining,
+  };
+}
+
+export function createClient(opts: ClientOptions) {
+  return createHttp({
+    ...opts,
+    name: "Freshdesk",
+    credsVar: "FRESHDESK_API_KEY",
+    base: `https://${normalizeDomain(opts.domain)}/api/v2`,
+    auth: "Basic " + Buffer.from(`${opts.apiKey}:X`).toString("base64"),
+  });
 }
 export type Client = ReturnType<typeof createClient>;
 
-async function describeError(res: Response, path: string): Promise<string> {
+async function describeError(res: Response, path: string, name: string, credsVar: string): Promise<string> {
   let detail = "";
   try {
-    const body = (await res.json()) as { description?: string; message?: string; errors?: { field?: string; message: string }[] };
-    detail = body.errors?.map((e) => (e.field ? `${e.field}: ${e.message}` : e.message)).join("; ") ?? body.message ?? body.description ?? "";
+    const body = (await res.json()) as {
+      description?: string; message?: string; errors?: { field?: string; message: string }[]; error?: { description?: string };
+    };
+    detail = body.errors?.map((e) => (e.field ? `${e.field}: ${e.message}` : e.message)).join("; ") ?? body.error?.description ?? body.message ?? body.description ?? "";
   } catch {}
   const hint: Record<number, string> = {
     400: "Invalid request",
-    401: "Authentication failed; check FRESHDESK_API_KEY",
-    403: "The API key's agent lacks permission for this resource",
+    401: `Authentication failed; check ${credsVar}`,
+    403: "The configured credentials lack permission for this resource",
     404: path.match(/\/tickets\/(\d+)$/) ? `Ticket ${path.split("/").pop()} not found` : `Not found: ${path}`,
   };
-  return [hint[res.status] ?? `Freshdesk error ${res.status}`, detail].filter(Boolean).join(" - ");
+  return [hint[res.status] ?? `${name} error ${res.status}`, detail].filter(Boolean).join(" - ");
 }
 
 export function nextPageFromLink(link: string | null): number | null {
@@ -212,6 +243,13 @@ export const ApiTicket = z.object({
     .nullish(),
 });
 export type ApiTicket = z.infer<typeof ApiTicket>;
+
+export const ApiConversation = z.object({
+  id: z.number(),
+  ticket_id: z.number(),
+  private: z.boolean().nullish(), // absent on reply responses
+  created_at: z.string(),
+});
 
 export const ApiContact = z.object({
   id: z.number(),
