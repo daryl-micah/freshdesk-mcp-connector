@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { buildServer } from "../src/server.ts";
 import { FreshdeskError, createClient, nextPageFromLink, normalizeDomain, paymentRefs, priorityName, statusName, ticketQuery } from "../src/freshdesk.ts";
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -108,4 +111,41 @@ test("enum maps, with fallback for custom statuses", () => {
   assert.equal(statusName(5), "closed");
   assert.equal(priorityName(4), "urgent");
   assert.equal(statusName(99), "custom_99");
+});
+
+test("MCP tools: names, mapping, payment_refs, errors (SDK validates outputSchema)", async () => {
+  const ticket = { id: 7, subject: "Refund", status: 2, priority: 4, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", description_text: "pay_ABCDEFGHIJKLMN" };
+  const { c } = client([
+    json({ results: [ticket], total: 45 }),
+    json({ ...ticket, conversations: [{ body_text: "Done rfnd_ZZZZZZZZZZZZZZ", incoming: false, created_at: "2026-01-03T00:00:00Z" }] }),
+    json({}, 404),
+  ]);
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await buildServer(c).connect(b);
+  const mcp = new Client({ name: "test", version: "0" });
+  await mcp.connect(a);
+
+  assert.deepEqual((await mcp.listTools()).tools.map((t) => t.name).sort(), ["get_ticket", "list_tickets", "search_contacts", "search_tickets"]);
+
+  const s = (await mcp.callTool({ name: "search_tickets", arguments: { status: "open" } })).structuredContent as any;
+  assert.equal(s.tickets[0].status, "open");
+  assert.equal(s.tickets[0].priority, "urgent");
+  assert.equal(s.next_page, 2);
+
+  const g = (await mcp.callTool({ name: "get_ticket", arguments: { id: 7 } })).structuredContent as any;
+  assert.deepEqual(g.payment_refs.refund_ids, ["rfnd_ZZZZZZZZZZZZZZ"]);
+
+  const nf = await mcp.callTool({ name: "get_ticket", arguments: { id: 999 } });
+  assert.equal(nf.isError, true);
+  assert.match((nf.content as any)[0].text, /Ticket 999 not found/);
+
+  const none = await mcp.callTool({ name: "search_tickets", arguments: {} });
+  assert.equal(none.isError, true);
+  assert.match((none.content as any)[0].text, /at least one filter/i);
+});
+
+test("Retry-After: 0 waits 0s, not the 60s fallback", async () => {
+  const { c, sleeps } = client([json({}, 429, { "retry-after": "0" }), json({})]);
+  await c.get("/x");
+  assert.deepEqual(sleeps, [0]);
 });

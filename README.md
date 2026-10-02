@@ -10,13 +10,19 @@ npm start                # verifies the key via /agents/me, then serves MCP on s
 ```
 Auth: API key sent as HTTP Basic (`base64(key:X)`). A bad key fails at startup with a clear message.
 
-Register with an MCP client, e.g. Claude Code: `claude mcp add freshdesk -- npx tsx src/server.ts` (run from this directory).
+Register with an MCP client, e.g. Claude Code: `claude mcp add freshdesk -- npx tsx /abs/path/to/razorpay/src/server.ts` (absolute path, so it works from any directory).
 
 Generic client config:
 ```json
 { "mcpServers": { "freshdesk": { "command": "npx", "args": ["tsx", "src/server.ts"], "cwd": "/path/to/razorpay",
   "env": { "FRESHDESK_DOMAIN": "acme.freshdesk.com", "FRESHDESK_API_KEY": "..." } } } }
 ```
+
+## Assumptions
+- Node >= 22 (uses `process.loadEnvFile`, native `fetch`).
+- A Freshdesk trial/free account; the API key's agent needs read access to tickets and contacts.
+- Default ticket statuses (2-5). Custom statuses appear as `custom_N`.
+- Seed data is fictional only.
 
 ## Tools
 | Tool | Use for |

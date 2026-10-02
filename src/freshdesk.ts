@@ -81,7 +81,8 @@ export function createClient(opts: ClientOptions) {
       if (remaining !== null) rateLimitRemaining = Number(remaining);
 
       if (res.status === 429) {
-        const wait = Math.min(Number(res.headers.get("retry-after")) || RETRY_AFTER_CAP_SEC, RETRY_AFTER_CAP_SEC);
+        const header = Number(res.headers.get("retry-after"));
+        const wait = Math.min(res.headers.has("retry-after") && !Number.isNaN(header) ? header : RETRY_AFTER_CAP_SEC, RETRY_AFTER_CAP_SEC);
         if (attempt >= maxAttempts) {
           throw new FreshdeskError(429, `Freshdesk rate limit hit; try again in ${wait}s`, true, wait);
         }
