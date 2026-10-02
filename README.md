@@ -1,11 +1,11 @@
-# Freshdesk read-only MCP connector
+# Freshdesk MCP connector
 
-An MCP (stdio) server that lets an Agent Studio agent read Freshdesk tickets. Four read-only tools, shaped for an LLM rather than mirroring the Freshdesk API.
+An MCP (stdio) server that lets an Agent Studio agent read Freshdesk tickets. Read-only by default, with opt-in write tools and optional Razorpay verification, all shaped for an LLM rather than mirroring the Freshdesk API.
 
 ## Setup
 ```bash
 npm install
-cp .env.example .env     # set FRESHDESK_DOMAIN and FRESHDESK_API_KEY
+cp .env.example .env     # set FRESHDESK_DOMAIN and FRESHDESK_API_KEY (writes and Razorpay are optional, see below)
 npm start                # verifies the key via /agents/me, then serves MCP on stdio
 ```
 Auth: API key sent as HTTP Basic (`base64(key:X)`). A bad key fails at startup with a clear message.
@@ -31,23 +31,37 @@ Generic client config:
 | `search_tickets` | Filter by status / priority / tag / created date range |
 | `get_ticket` | One ticket with requester + first 10 conversation entries |
 | `search_contacts` | Find a customer by exact email / phone |
+| `list_agents`, `list_groups` | Find the ids `assign_ticket` needs |
+| `verify_payment_refs` | Check `pay_`/`order_`/`rfnd_` ids against Razorpay. Needs `RAZORPAY_KEY_ID` + `RAZORPAY_KEY_SECRET` (test-mode keys are fine) |
+
+Write tools, registered only when `FRESHDESK_ALLOW_WRITES=1`:
+
+| Tool | Use for |
+|---|---|
+| `add_note` | Internal note (private by default) |
+| `reply_to_ticket` | Email the customer; cannot be undone |
+| `update_ticket` | Status and/or priority; closing is `status: closed` |
+| `assign_ticket` | `responder_id` and/or `group_id` |
+| `update_tags` | Add/remove tags, keeping the rest |
 
 Every ticket carries `payment_refs` (`pay_`, `order_`, `rfnd_` IDs extracted from the text), so an agent can ask "which open tickets mention a payment with no refund yet?".
 
 ## Design decisions
-- **Read-only.** GET only; no write tools. Replies/closing belong behind a human-approval step.
+- **Read-only unless you opt in.** Without `FRESHDESK_ALLOW_WRITES=1` the write tools are not registered and nothing but GET is reachable. With it, write tools are typed (no raw API bodies), plain text is HTML-escaped before it is sent, and they carry `destructiveHint` so MCP clients ask a human first. Ticket text is untrusted, so the server does not auto-approve anything.
+- **Writes are never blindly retried.** A POST that times out or gets a 5xx may have landed, so it is not resent (a resent reply emails the customer twice); the error says to check the ticket. 429s are retried for every method.
+- **Razorpay verification is separate and read-only.** Ticket text only claims a payment; `verify_payment_refs` checks the ids against `api.razorpay.com` (fixed host).
 - **Typed filters, not raw query syntax.** The agent can't send malformed or injected Freshdesk queries; values are whitelisted and the 512-char limit is enforced.
 - **LLM-friendly output.** Names instead of numeric codes, plain text instead of HTML, bodies clipped to 2000 chars, no attachments, `outputSchema` + `structuredContent`.
 - **Rate limits.** 429 → wait `Retry-After` (capped 60s) and retry; 5xx/network → exponential backoff + jitter, 3 attempts; 4xx → never retried, with Freshdesk's error detail. Slows down when `X-Ratelimit-Remaining` < 5.
 - **Key safety.** Domain must be `*.freshdesk.com`, so a bad config can't send the key elsewhere.
-- Minimal deps: MCP SDK + zod, native `fetch`.
+- Minimal deps: MCP SDK + zod, native `fetch`. Razorpay reuses the Freshdesk HTTP core (retry, timeout, typed errors).
 
 ## Verify
 ```bash
 npm test          # offline tests, mocked fetch
 npm run typecheck
-npm run seed      # live: ~15 fictional tickets in your trial account (only write path)
-npm run smoke     # live end-to-end checks
+npm run seed      # live: ~15 fictional tickets in your trial account
+npm run smoke     # live end-to-end checks, including write tools on one scratch ticket (leaves it closed)
 npm run inspect   # MCP Inspector
 ```
 
