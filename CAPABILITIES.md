@@ -16,6 +16,7 @@
 ## Limitations
 - `list_tickets` returns only the last 30 days unless `updated_since` is set.
 - Search caps at 300 results (10 pages × 30); new tickets take a few minutes to become searchable.
+- `payment_refs` from `list_tickets`/`search_tickets` come from the subject and description only. A refund ID mentioned in a reply shows up only via `get_ticket`, so "no refund yet" answers from lists are provisional.
 - Only the first 10 conversation entries are inlined (`conversations_may_be_truncated` flags it).
 - Rate limit is per Freshdesk account and shared with other integrations; throttling is per process. The trial allows 50 calls/minute (`X-Ratelimit-Total`); `list_tickets` costs 2 credits per call because it requests descriptions (`include=description`), other calls cost 1.
 - `created_after` / `created_before` are inclusive of the given date (verified live).

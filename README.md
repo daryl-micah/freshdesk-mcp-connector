@@ -50,4 +50,9 @@ npm run seed      # live: ~15 fictional tickets in your trial account (only writ
 npm run smoke     # live end-to-end checks
 npm run inspect   # MCP Inspector
 ```
-See [CAPABILITIES.md](CAPABILITIES.md) for what the agent can and can't do.
+
+## Demo
+[docs/demo.md](docs/demo.md): Claude Code as the MCP client answering four merchant questions against seeded tickets (urgent open tickets, a customer summary, unrefunded payments, a missing ticket).
+
+## Capabilities
+[CAPABILITIES.md](CAPABILITIES.md): what the agent can and cannot do, known limitations, and the long-term fixes.
