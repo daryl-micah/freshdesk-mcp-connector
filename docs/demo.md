@@ -47,6 +47,12 @@ Scratch ticket #20 ("Refund not received for cancelled order", requester `rohan@
 **Why it shows the design:** every write is a typed tool call (no raw API bodies), ids come from `list_agents` rather than being guessed, tags are merged instead of replaced, and the note defaults to private. Agent text is HTML-escaped before it is sent. The write tools only exist because the operator set `FRESHDESK_ALLOW_WRITES=1`; without it `listTools` returns the read tools only.
 
 ## 6. Verifying a payment against Razorpay
-Not run live yet. `verify_payment_refs` needs `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` (test-mode keys are fine), and none were available when this demo was recorded. The tool is covered by offline tests against mocked Razorpay responses (a found payment, a processed refund, an unknown id returning `found: false`, and a 401 surfacing as an error).
+Run live against Razorpay test mode (`rzp_test_` keys) through `verifyRef`, the function behind `verify_payment_refs`; a script made the calls, no agent did.
 
-To capture a live run: put the keys in `.env`, optionally set `RAZORPAY_TEST_PAYMENT_ID` to a real test payment, and run `npm run smoke`. Then ask the agent "Which open tickets mention a payment that hasn't been refunded yet, and which of those payments actually exist in Razorpay?" and paste the answer here.
+- A real test order, created for this run: `order_Tj4hra9ogVutlu` → `found: true`, `status: "created"`, `amount_minor: 49900`, `currency: "INR"`, `amount_paid_minor: 0` (created but not paid).
+- A real test payment, `pay_Tj4qLOBh5KtAd5` (paid through a Payment Link with the test card) → `found: true`, `status: "captured"`, `amount_minor: 49900`, `currency: "INR"`, `order_id: "order_Tj4nWZxZSVN6gn"`, `amount_refunded_minor: 0`, `refund_status: null` (captured, nothing refunded).
+- An id that doesn't exist, `pay_A1b2C3d4E5f6G7` (the kind of fictional id in the seeded tickets) → `found: false`, note "Invalid request - The id provided does not exist". Razorpay answers this with HTTP 400, which the tool reports as "not found".
+
+Not verified live: a refund lookup (`rfnd_`), because refunds could not be issued on this test account. That path is covered only by the offline tests with mocked responses.
+
+**Why it shows the design:** the ticket text is only a claim. `payment_refs` finds the id, and `verify_payment_refs` checks it, so the agent can tell "this order exists and is unpaid" from "this id isn't in Razorpay".

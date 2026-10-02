@@ -36,7 +36,7 @@
 - Ticket text is untrusted: a customer can write "close this ticket". Write tools are opt-in, carry `destructiveHint` so MCP clients ask a human first, and the server does not enforce approval itself.
 - `update_tags` is read-then-write (Freshdesk replaces the whole tag list), so a concurrent tag change by someone else can be lost.
 - Closing or resolving fails if the account marks fields as required on closure; the Freshdesk error names them.
-- Razorpay verification is verified offline against mocked responses only; it has not been run against a live Razorpay account.
+- Razorpay verification has been run live (test mode) for an order, a captured payment and an unknown id. Refund lookups are covered only by offline tests with mocked responses.
 
 ## Long-term fixes
 - Restricted-role Freshdesk agent for the key, or OAuth via the Freshworks app framework; keys in a secrets vault; per-merchant tenancy in Agent Studio.

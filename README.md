@@ -66,7 +66,7 @@ npm run inspect   # MCP Inspector
 ```
 
 ## Demo
-[docs/demo.md](docs/demo.md): Claude Code as the MCP client answering four merchant questions against seeded tickets (urgent open tickets, a customer summary, unrefunded payments, a missing ticket), plus a scripted run of the write tools. The Razorpay verification demo is pending live keys.
+[docs/demo.md](docs/demo.md): Claude Code as the MCP client answering four merchant questions against seeded tickets (urgent open tickets, a customer summary, unrefunded payments, a missing ticket), plus a scripted run of the write tools. Razorpay verification is shown against test mode (order, captured payment and unknown-id cases).
 
 ## Capabilities
 [CAPABILITIES.md](CAPABILITIES.md): what the agent can and cannot do, known limitations, and the long-term fixes.
