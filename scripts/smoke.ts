@@ -13,7 +13,7 @@ await mcp.connect(
   new StdioClientTransport({
     command: "npx",
     args: ["tsx", fileURLToPath(new URL("../src/server.ts", import.meta.url))],
-    env: process.env as Record<string, string>,
+    env: { ...process.env, FRESHDESK_ALLOW_WRITES: "1" } as Record<string, string>,
   }),
 );
 
@@ -63,5 +63,53 @@ await step("burst tracks rate-limit headers", async () => {
   console.log("     X-Ratelimit-Remaining =", fd.rateLimit());
   assert.ok(fd.rateLimit() !== undefined);
 });
+
+// Write path: creates one ticket (raw client, not a tool), drives every write tool on it, then closes it.
+// ponytail: leaves one closed "[smoke]" ticket per run; the client has no DELETE on purpose.
+let wid = 0;
+let me = 0;
+await step("write tools: note, tags, assign, reply, close on a scratch ticket", async () => {
+  const { data } = await fd.post("/tickets", {
+    subject: "[smoke] write check", description: "Created by scripts/smoke.ts", email: "asha@kiranastore.example",
+    status: 2, priority: 1, tags: ["smoke"],
+  });
+  wid = (data as { id: number }).id;
+  const agents = await call("list_agents");
+  assert.ok(!agents.isError && agents.out.agents.length >= 1, agents.text);
+  me = agents.out.agents[0].id;
+  const groups = await call("list_groups");
+  assert.ok(!groups.isError, groups.text);
+
+  const note = await call("add_note", { id: wid, body: "internal <b>check</b> & more" });
+  assert.ok(!note.isError && note.out.private === true, note.text);
+  const tags = await call("update_tags", { id: wid, add: ["smoke-tagged"], remove: ["smoke"] });
+  assert.ok(!tags.isError && tags.out.ticket.tags.join() === "smoke-tagged", tags.text);
+  const assigned = await call("assign_ticket", { id: wid, responder_id: me });
+  assert.ok(!assigned.isError && assigned.out.responder_id === me, assigned.text);
+  const reply = await call("reply_to_ticket", { id: wid, body: "Hello from the smoke test" });
+  assert.ok(!reply.isError && reply.out.private === false, reply.text);
+
+  const t = await call("get_ticket", { id: wid });
+  const bodies = t.out.conversations.map((c: any) => c.body).join("\n");
+  assert.ok(bodies.includes("internal <b>check</b> & more"), "note text should round-trip literally, not as HTML");
+  assert.ok(bodies.includes("Hello from the smoke test"));
+  const closed = await call("update_ticket", { id: wid, status: "closed" });
+  assert.ok(!closed.isError && closed.out.ticket.status === "closed", closed.text);
+});
+
+if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+  await step("verify_payment_refs: unknown id -> found:false", async () => {
+    const r = await call("verify_payment_refs", { ids: ["pay_A1b2C3d4E5f6G7"] });
+    assert.ok(!r.isError && r.out.results[0].found === false, r.text);
+  });
+  const real = process.env.RAZORPAY_TEST_PAYMENT_ID;
+  if (real) {
+    await step("verify_payment_refs: real test payment", async () => {
+      const r = await call("verify_payment_refs", { ids: [real] });
+      assert.ok(!r.isError && r.out.results[0].found && r.out.results[0].status, r.text);
+      console.log("    ", JSON.stringify(r.out.results[0]));
+    });
+  }
+} else console.log("skip verify_payment_refs (set RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET to test)");
 
 await mcp.close();
