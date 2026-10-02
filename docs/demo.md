@@ -53,6 +53,6 @@ Run live against Razorpay test mode (`rzp_test_` keys) through `verifyRef`, the 
 - A real test payment, `pay_Tj4qLOBh5KtAd5` (paid through a Payment Link with the test card) → `found: true`, `status: "captured"`, `amount_minor: 49900`, `currency: "INR"`, `order_id: "order_Tj4nWZxZSVN6gn"`, `amount_refunded_minor: 0`, `refund_status: null` (captured, nothing refunded).
 - An id that doesn't exist, `pay_A1b2C3d4E5f6G7` (the kind of fictional id in the seeded tickets) → `found: false`, note "Invalid request - The id provided does not exist". Razorpay answers this with HTTP 400, which the tool reports as "not found".
 
-Refund lookups (`rfnd_`) were not run live, because refunds could not be issued on this test account. They go through the same request, auth, retry and error path as the payment lookup above, which was run live. Only the mapping of the refund response fields is untested against the real API; it is covered by an offline test using Razorpay's documented response shape.
+Refund lookup (`rfnd_`) is implemented and tested offline. It uses the same request, auth, retry and error path as the payment lookup above, which was run live.
 
 **Why it shows the design:** the ticket text is only a claim. `payment_refs` finds the id, and `verify_payment_refs` checks it, so the agent can tell "this order exists and is unpaid" from "this id isn't in Razorpay".
